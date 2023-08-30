@@ -1,6 +1,7 @@
 import nibabel as nib
 import matplotlib.pyplot as plt
-from matplotlib.widgets import RectangleSelector, Button
+from matplotlib.widgets import RectangleSelector, Button, PolygonSelector
+from matplotlib.path import Path
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog
@@ -34,19 +35,16 @@ def update_slice(ax, slice_data):
 
     # Re-activate RectangleSelector on the updated axis
     global rs
-    rs = RectangleSelector(ax, onselect, interactive=True)
+    rs = PolygonSelector(ax, onselect_polygon, ops=dict(color='red', linewidth=2))
 
 
 # ROI selection
 global btn_copy  # Declare the button as a global variable
 
 
-def onselect(eclick, erelease):
+def onselect_polygon(vertices):
     global roi_coords
-
-    x1, y1 = eclick.xdata, eclick.ydata
-    x2, y2 = erelease.xdata, erelease.ydata
-    roi_coords = [int(x1), int(x2), int(y1), int(y2)]
+    roi_coords = vertices  # Store the polygon vertices
 
     # Calculate and plot the average b-values
     avg_b_values = calculate_avg_b_value_through_time(data, roi_coords)
@@ -67,11 +65,39 @@ def onselect(eclick, erelease):
 
 
 # Calculate average b-value within ROI
-def calculate_avg_b_value(data, roi_coords):
-    x1, x2, y1, y2 = roi_coords
-    roi_data = data[x1:x2, y1:y2]
-    avg_b_value = np.mean(roi_data)
-    return avg_b_value
+def calculate_avg_b_value_through_time(data, roi_coords):
+    # Create a Path object for the ROI
+    roi_path = Path(roi_coords)
+
+    # Get the dimensions of the data
+    x_dim, y_dim, num_slices, num_time_points = data.shape
+
+    # Precompute the ROI mask
+    x, y = np.meshgrid(np.arange(x_dim), np.arange(y_dim))
+    xy = np.column_stack((x.ravel(), y.ravel()))
+    mask = roi_path.contains_points(xy).reshape(x_dim, y_dim)
+
+    # Initialize an empty list to store the average b-values for each time point
+    avg_b_values = []
+
+    # Loop through all time points
+    for t in range(num_time_points):
+        # Initialize variables to keep track of the sum and count of b-values in the ROI
+        sum_b_values = 0
+        count = 0
+
+        # Loop through all slices (assuming the polygon is applicable to all slices)
+        for s in range(num_slices):
+            slice_data = data[:, :, s, t]
+            sum_b_values += np.sum(slice_data[mask])
+            count += np.sum(mask)
+
+        # Calculate the average b-value for the time point
+        avg_b_value = sum_b_values / count if count > 0 else 0
+        avg_b_values.append(avg_b_value)
+
+    return avg_b_values
+
 
 
 # Key event to scroll slices and time segments
@@ -86,26 +112,6 @@ def on_key(event):
     elif event.key == 'right':
         current_time = min(current_time + 1, data.shape[3] - 1 if len(data.shape) == 4 else 0)
     update_slice(ax, data[:, :, current_slice, current_time] if len(data.shape) == 4 else data[:, :, current_slice])
-
-
-def calculate_avg_b_value_through_time(data, roi_coords):
-    x1, x2, y1, y2 = roi_coords
-    avg_b_values = []
-
-    # Check if data has a time dimension
-    has_time_dimension = len(data.shape) == 4
-
-    if has_time_dimension:
-        num_time_points = data.shape[3]
-    else:
-        num_time_points = 1
-
-    for t in range(num_time_points):
-        roi_data = data[x1:x2, y1:y2, current_slice, t] if has_time_dimension else data[x1:x2, y1:y2, current_slice]
-        avg_b_value = np.mean(roi_data)
-        avg_b_values.append(avg_b_value)
-
-    return avg_b_values
 
 
 # Main function
@@ -131,7 +137,7 @@ if __name__ == '__main__':
 
     # ROI selection and slice scrolling
     global rs  # Declare rs as global
-    rs = RectangleSelector(ax, onselect, interactive=True)
+    rs = PolygonSelector(ax, onselect_polygon, props=dict(color='red', linewidth=2))
     fig.canvas.mpl_connect('key_press_event', on_key)
     plt.show()
 
